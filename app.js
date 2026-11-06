@@ -178,7 +178,8 @@ function render(){
   body.append(text('span',(labels[p.category]||'Business')+' · HARARE','tag'),text('h3',p.name),text('p',p.area,'muted'));
   const bottom=text('div','','card-bottom');bottom.style.flexWrap='wrap';bottom.style.gap='12px';
   if(p.directory){
-   body.append(text('p','Community listing · Not bookable on SLOT yet','muted'));
+   body.append(text('p','Community listing · Confirm price and time directly','muted'));
+   if(p.phone){const request=text('button','Request a booking','primary');request.onclick=()=>openBookingRequest(p);body.append(request);}else body.append(text('p','Booking requests unavailable until contact details are supplied','muted'));
    body.append(text('p',p.closing?'Listed closing time: '+p.closing+' CAT · confirm by phone':'Opening hours not supplied','muted'));
    if(p.phone){const call=text('a','Call '+p.phone,'primary');call.href='tel:'+p.phone.replace(/\s/g,'');call.style.cssText='border-radius:24px;text-decoration:none;font-size:13px;display:inline-block';bottom.append(call);}
    else body.append(text('p','Phone number not supplied','muted'));
@@ -253,4 +254,43 @@ async function completeEmailSignIn(){
  }catch(e){session=null;sessionStorage.removeItem('slot-session');$('#status').textContent='Sign-in failed: '+e.message+' Please request a fresh link.';return false;}
 }
 async function init(){try{if(configError){$('#mode').textContent='Supabase configuration needs attention';throw Error(configError);}if(live){$('#mode').textContent='Live · Zimbabwe time · Pay at venue';providers=await api('/rest/v1/providers?select=*,services(*)&published=eq.true');providers.forEach(p=>p.services=p.services.filter(s=>s.active));}else {providers=[...directoryListings,...samples];$('#mode').textContent='14 community listings · Contact businesses directly · Sample bookings are separate';}$('#account').textContent=session?'Account':'Sign in';render();}catch(e){$('#status').textContent=e.message;}}
+
+// Requests are composed locally, then sent by the customer in their own messaging app.
+// They do not reserve availability, confirm an appointment, or create a bill.
+function setupBookingRequests(){
+ const dialog=document.createElement('dialog');dialog.id='request-dialog';dialog.setAttribute('aria-labelledby','request-title');
+ dialog.innerHTML='<form id="request-form"><button type="button" class="close" id="request-close" aria-label="Close booking request">✕</button><p class="eyebrow">REQUEST A TIME</p><h2 id="request-title"></h2><p>Propose a service and time. The business must confirm availability and price directly with you. This form does not reserve a slot.</p><label>Your name<input id="request-name" required maxlength="80" autocomplete="given-name"></label><label>What service would you like?<input id="request-service" required maxlength="120" placeholder="For example, a haircut or manicure"></label><label>Preferred date<input id="request-date" type="date" required></label><label>Preferred time (Zimbabwe / CAT)<input id="request-time" type="time" required></label><button class="primary" id="prepare-request">Prepare request</button><p id="request-status" role="status"></p><section id="request-preview" hidden><label>Your message<textarea id="request-message" rows="7" readonly style="width:100%;padding:12px;border:1px solid #dad3e3;border-radius:9px;font:inherit"></textarea></label><p><strong>Not sent. Not confirmed.</strong> Copy this message, or open your SMS app and tap Send there. Wait for the business to reply before travelling or paying.</p><div style="display:flex;gap:10px;flex-wrap:wrap"><a id="request-sms" class="primary" style="display:inline-block;border-radius:24px;text-decoration:none">Open SMS app</a><button type="button" id="request-copy">Copy message</button></div></section></form>';
+ document.body.append(dialog);
+ $('#request-close').onclick=()=>dialog.close();
+ $('#request-form').onsubmit=e=>{
+  e.preventDefault();$('#request-preview').hidden=true;
+  const start=new Date($('#request-date').value+'T'+$('#request-time').value+':00+02:00');
+  if(!Number.isFinite(+start)||start<=new Date()){$('#request-status').textContent='Choose a future date and time in Zimbabwe.';return;}
+  const provider=directoryListings.find(p=>p.id===dialog.dataset.provider);
+  if(!provider?.phone){$('#request-status').textContent='No contact number is available for this business.';return;}
+  const name=$('#request-name').value.trim(),service=$('#request-service').value.trim();
+  if(!name||!service){$('#request-status').textContent='Enter your name and the service you would like.';return;}
+  const message='Hello '+provider.name+', I found your listing on SLOT. My name is '+name+'. I would like '+service+' on '+$('#request-date').value+' at '+$('#request-time').value+' CAT. Please confirm availability, the service price and the appointment address. This is a request, not a confirmed booking.';
+  $('#request-message').value=message;
+  const separator=/iPad|iPhone|iPod/.test(navigator.userAgent)?'&':'?';
+  $('#request-sms').href='sms:'+provider.phone.replace(/\s/g,'')+separator+'body='+encodeURIComponent(message);
+  $('#request-preview').hidden=false;
+  $('#request-status').textContent='Message prepared on this device. Nothing has been sent to the business.';
+ };
+ $('#request-copy').onclick=async()=>{try{await navigator.clipboard.writeText($('#request-message').value);$('#request-status').textContent='Message copied. Paste it into your preferred messaging app and send it yourself.';}catch{$('#request-status').textContent='Copy is unavailable. Select and copy the message above.';}};
+ for(const id of ['request-name','request-service','request-date','request-time'])$('#'+id).addEventListener('input',()=>{$('#request-preview').hidden=true;$('#request-status').textContent='';});
+ const fees=document.createElement('details');fees.style.cssText='margin:32px 0;padding:22px;background:#eee8fa;border-radius:18px';
+ fees.innerHTML='<summary style="cursor:pointer;font-weight:700">For businesses · Our proposed 3% pilot fee</summary><p>No monthly subscription or featured-listing charges during the pilot. Our proposed fee is <strong>3% of eligible completed services</strong> from SLOT bookings, paid by participating businesses after agreeing to the terms.</p><p>For a US$10 completed service, the proposed SLOT fee is US$0.30. The customer pays the agreed service price to the business; the business pays SLOT its agreed fees separately. Requests and cancelled appointments do not generate a fee.</p><p><strong>No payments are collected on this demo.</strong> Listing a business does not subscribe it or create a fee agreement. Future price changes would be communicated and agreed before applying.</p>';
+ document.querySelector('footer').before(fees);
+ $('#appointments').textContent='Demo bookings';
+}
+function openBookingRequest(provider){
+ const dialog=$('#request-dialog');dialog.dataset.provider=provider.id;$('#request-title').textContent=provider.name;
+ $('#request-form').reset();$('#request-preview').hidden=true;$('#request-status').textContent='';
+ const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Harare',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+ const part=key=>parts.find(p=>p.type===key).value;const today=part('year')+'-'+part('month')+'-'+part('day');
+ $('#request-date').min=today;$('#request-date').value=today;dialog.showModal();
+}
+setupBookingRequests();
+
 const returnedFromEmail=await completeEmailSignIn();await init();if(returnedFromEmail)openAccount();
