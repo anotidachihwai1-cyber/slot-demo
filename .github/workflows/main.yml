@@ -1,0 +1,249 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#552bd5"><title>SLOT · Your next good look</title><link rel="stylesheet" href="style.css"></head><body><header><a class="logo" href="./index.html">SLOT<span>●</span></a><span>HARARE, ZIMBABWE</span><button id="account">Sign in</button></header><main><div class="notice" id="mode">Demo · sample businesses and bookings on this device only</div><section class="hero"><p class="eyebrow">GOOD LOOKS. LESS BACK AND FORTH.</p><h1>Your next good look.<br><em>One slot away.</em></h1><p>Find your barber or nail artist. Pick a time. Make it yours.</p><label class="search">⌕ <input id="search" placeholder="Search business or neighbourhood" aria-label="Search businesses"></label></section><nav><button class="active" data-category="all">All services</button><button data-category="barber">Barbers</button><button data-category="nails">Nail artists</button><button id="appointments">My bookings</button></nav><div class="heading"><h2>Find your next favourite</h2><span>Harare first. Locally made.</span></div><section id="list" class="grid"></section><section id="bookings" hidden><h2>Your appointments</h2><div id="booking-list"></div></section><p role="status" id="status"></p><footer>SLOT · Book. Show up. Look good.<br>Pay at your appointment. Online payments coming later.</footer></main><dialog id="booking"><form id="booking-form"><button type="button" class="close" id="close">✕</button><p class="eyebrow">MAKE TIME FOR YOU</p><h2 id="provider-name"></h2><label>Service<select id="service" required></select></label><label>Date<input type="date" id="date" required></label><label>Available time<select id="time" required></select></label><p>Times shown in Zimbabwe time (CAT). Pay at venue.</p><button class="primary" id="confirm">Confirm appointment</button><p id="booking-message" role="status"></p></form></dialog><dialog id="login"><form id="login-form"><h2>Welcome to SLOT</h2><p>Sign in with an email code. Your phone stays private.</p><label>Email<input type="email" id="email" required autocomplete="email"></label><label>Code (after requesting one)<input id="code" inputmode="numeric" autocomplete="one-time-code"></label><button type="button" id="send-code">Send code</button><button class="primary">Verify & sign in</button><button type="button" id="logout">Sign out</button><button type="button" id="close-login">Close</button><p id="login-message" role="status"></p></form></dialog><script type="module" src="app.js"></script></body></html>
+
+{"name":"slot","private":true,"version":"0.1.0","type":"module","scripts":{"dev":"node server.mjs","test":"node --test tests/*.test.mjs"},"engines":{"node":">=22"}}
+
+# SLOT starter · Zimbabwe first
+
+Working mobile web starter with local demo mode and a Supabase live adapter. Fictional businesses are clearly labelled. No payment is collected. This is an initial customer slice, not a production-complete marketplace.
+
+## Start now
+
+Requires Node 22 or newer. No installation or npm required:
+
+```powershell
+node server.mjs
+```
+
+On Windows you can also double-click `Start SLOT.cmd` in the extracted folder. Keep the server window open while using the app. Open http://127.0.0.1:5173/ in your browser. This is a local address on your computer, not a public website; it will not work on a phone or another computer without deployment.
+
+Search, filter barbers/nail artists, select a service/date/time, book, view appointments and cancel. Demo data persists on this browser only. It cannot prevent conflicts across different devices. The live PostgreSQL constraint provides that guarantee.
+
+Run `node --test tests/*.test.mjs` for time and overlap checks.
+
+## Exact MVP stack
+
+| Layer | Choice |
+|---|---|
+| App | Native JavaScript ES modules, HTML5, CSS; no runtime dependencies |
+| Local server | Node built-in HTTP, development only |
+| Backend | Supabase REST + tightly scoped PostgreSQL RPCs |
+| Database | Supabase PostgreSQL, `btree_gist`, RLS |
+| Authentication | Supabase email OTP; add phone OTP after testing Zimbabwe SMS delivery and cost |
+| Hosting | Cloudflare Pages static deployment |
+| Images, later | Supabase Storage with owner-folder upload policies, image size/type restrictions and compressed derivatives |
+| Payments, later | Server-side Supabase Edge Function + Paynow adapter |
+| Tests | Node built-in test now; PostgreSQL integration tests before live pilot; browser automation as flow grows |
+
+This intentionally simplifies the earlier Next.js proposal. Database functions supply the small backend; a static frontend keeps hosting simple. Add TypeScript/Vite/React when UI complexity justifies a build pipeline. Do not rewrite a working pilot merely to change frameworks. No AI model API is required in the customer product.
+
+## Connect live Supabase
+
+1. Create a fresh Supabase project. Use a region with measured acceptable latency from Zimbabwe; test on actual mobile data.
+2. Run `supabase/migrations/001_slot.sql` in its SQL editor. It is a one-time migration, not idempotent. Keep future changes in numbered migrations.
+3. Enable email sign-in. Edit the magic-link email template to display `{{ .Token }}` for the code flow. Configure trusted Site URL/redirects, production SMTP, rate limits and CAPTCHA before public signup.
+4. Set `url` and `anonKey` in `config.js`. The `anonKey` field accepts the current `sb_publishable_...` public key or a legacy public anon JWT. Secret/service-role keys are rejected. The browser sends the public key in `apikey` and the signed-in user's JWT in `Authorization`; RLS is mandatory.
+5. Create a real provider account through the sign-in form, copy its UUID from Auth, and customize `supabase/onboard.sql`. Verify the business in person before publishing. Initial onboarding, hours and services are managed in the dashboard.
+6. Serve the app again. A configured app uses real API data only. API errors never silently switch to demo bookings.
+7. Register two separate customer accounts and test the database checklist below before inviting customers.
+
+Email OTP is a practical pilot compromise. The frontend stores its session in sessionStorage and refreshes an expiring token before API calls; a failed refresh requires sign-in again. Test real expiry/refresh against your project before pilot. Avoid third-party scripts and add a reviewed Content Security Policy at deployment.
+
+## Database and authorization
+
+| Table | Contents | Client access |
+|---|---|---|
+| profiles | Private display name and optional +263 phone | Own row only |
+| providers | Public business information, private ownership link | Published rows or own row; owner edits name/address/area/bio only |
+| services | Duration, buffer, amount in minor units, currency | Read active published services or own business services; admin writes |
+| working_hours | One opening interval per weekday per provider | Read published/own hours; admin writes |
+| appointments | Booking/block, customer, immutable price/service snapshot, interval, request key | Customer or provider owner reads; writes through RPC only |
+
+One provider is one resource/person. A salon with three workers needs three provider records in this pilot. Add `businesses`, `staff` and service-to-staff assignments before scaling multi-staff salons. Never let a salon-wide calendar serialize three independent workers.
+
+The GiST exclusion constraint rejects overlapping `[start, busy_until)` ranges for the same provider, including buffers and time-off blocks. Adjacent intervals are valid. Cancelled appointments release time. Completed/no-show rows preserve historical occupancy. SQL `book_appointment` computes duration, price, user and provider; the browser cannot submit a cheaper price or another customer UUID. Every booked start must be a valid 30-minute-grid slot inside working hours, at least 30 minutes ahead and at most 60 local calendar days out. Harare dates use `Africa/Harare`; timestamps use `timestamptz`.
+
+Availability is advisory. Two users may see the same time; only one conflicting insert can commit. The booking function serializes the provider and the customer and enforces a 10-upcoming-booking cap. Retrying the SAME request UUID returns the same booking. The form retains its pending UUID in sessionStorage for the same account/service/time across unknown-network-outcome retries. After a connection drop, check My bookings before choosing another time. Cancellation is idempotency-limited: a second cancel reports unavailable rather than changing another row. Rescheduling is deliberately absent; implement it as one database transaction rather than cancel-then-create.
+
+Functions use a fixed empty search path and explicit object names. PUBLIC execute is revoked. There is no client appointment insert/update/delete grant and no provider publication/ownership grant. Admin credentials bypass RLS: keep them out of source and frontend. Customer profiles are not exposed to provider owners; a later contact RPC should disclose only the minimal data for a confirmed appointment. No storage bucket is created yet.
+
+## Database verification required before live use
+
+SQL was authored here but needs execution against your Supabase/PostgreSQL project. No database credentials are included.
+
+- Anonymous user: sees published discovery data and available times; cannot read profiles or appointments, create a booking, publish a provider or modify services.
+- Customer A vs B: each sees their own appointment only; neither can cancel the other's appointment. Direct insert/update/delete must fail, even with forged customer/provider/price values.
+- Owner A vs B: owner A sees only appointments for A's providers; cannot edit B, change owner_id or published, or complete a future appointment.
+- Use two simultaneous authenticated sessions to book the same provider/time with different keys: exactly one succeeds. Test partially overlapping services, buffers, adjacent bookings and distinct providers.
+- Retry a successful request with the same key: same ID, one row. Reuse that key with different input: error.
+- Block time as provider, then book it as customer: rejected. Try blocking an existing booking: rejected. Cancel the block as owner: time available again.
+- Test outside-hours starts, invalid grid, closed days, past time, booking horizon, cancelled release, DST-independent CAT date boundary and a service ending at closing time including buffer.
+- Edit hours/services inside a provider-locked transaction while another session books. Inspect booking snapshots and existing appointments. Add automated database integration tests to CI before public launch.
+
+## MVP screens and next coding order
+
+1. **Discover (built):** city/neighbourhood search, two categories, provider cards. No invented ratings.
+2. **Provider + booking (built as modal):** service, duration, explicit USD/ZWG price, Harare date/time, pay-at-venue confirmation.
+3. **Account (built basic):** email code, sign out. Next: refresh/expiry handling, retries, profile/contact consent.
+4. **My bookings (built basic):** status/time and cancellation. Next: provider address, service/price details and business cancellation policy.
+5. **Provider day view (next):** owner-filtered bookings, time-off RPC, completion/no-show RPC, manual appointments for WhatsApp/walk-ins. Recording offline bookings is essential for an accurate calendar.
+6. **Onboarding/settings (concierge now):** business verification, services, hours, location, preview/publish. Next build owner forms calling reviewed RPCs; keep publication administrator-only.
+7. **Operations (dashboard now):** suspend listings, help customers, audit adjustments. Next add append-only audit/outbox events, privacy retention, reporting and notification delivery tracking.
+
+First coding tasks, in order: connect and verify real auth, token refresh and unknown-network-outcome retries; build provider calendar and manual booking RPC; automate SQL authorization/concurrency tests; add reliable confirmation/reminder outbox and monitored worker; then conduct a closed pilot. Add cancellation policy acknowledgement and transactions for rescheduling before advertising them.
+
+## Deploy affordably
+
+Upload only `index.html`, `style.css`, `app.js`, `auth.js`, `booking.js`, `config.js` to Cloudflare Pages (static project, no build command). Do not upload SQL, README, tests or the development server. A build is unnecessary. Google Fonts are optional: system font fallbacks work if unavailable; self-host/subset fonts for the pilot to save requests. No service worker/offline booking queue: a booking must reach PostgreSQL before it is confirmed.
+
+Prototype budget: Cloudflare Pages Free + Supabase Free within current plan limits, plus domain/email as chosen. For a real pilot budget from about USD 25/month for Supabase Pro, plus domain, transactional email, notifications and any usage overages. Check current plans before purchase, configure spending controls where available, backups and restore drills. Vercel Hobby is restricted to personal noncommercial use; do not assume it covers the marketplace.
+
+Sources checked 6 November 2026: [Cloudflare Pages](https://developers.cloudflare.com/pages/), [Supabase pricing](https://supabase.com/pricing), [RLS](https://supabase.com/docs/guides/database/postgres/row-level-security), [Vercel Hobby](https://vercel.com/docs/plans/hobby).
+
+## Zimbabwe payments: add after booking reliability
+
+Start with pay-at-venue, no claimed online payment status. Evaluate Paynow with its official developer documentation and merchant onboarding; confirm supported currency, settlement, fees, refunds and marketplace collection/payout arrangements directly. Gateway support alone does not establish permission to hold funds or split settlements.
+
+Later create `payment_attempts` (booking_id, gateway, reference UNIQUE, amount_minor, currency, status, provider_transaction_id UNIQUE, timestamps) and private `payment_events` (gateway event ID UNIQUE, verified payload hash, processing status). Service-role/worker access only; customer gets a narrow payment-status RPC. An Edge Function creates payment requests from trusted booking snapshots. Never accept frontend amount/status, expose integration keys or mark paid from the return URL. Verify callback signatures per official gateway spec and confirm status server-side; deduplicate events, reconcile delayed events and test refunds. Define a deposit hold + expiry transaction before enabling deposits: late payment after slot release needs a refund/manual-resolution path, not a conflicting booking.
+
+Official sources: [Paynow Developer Hub](https://developers.paynow.co.zw/), [integration keys](https://developers.paynow.co.zw/docs/paynow/integration_generation/).
+
+## Growth plan with measurable gates
+
+Pilot one Harare neighbourhood with 10–20 barbers/nail technicians. Help each enter services and all walk-in/WhatsApp bookings, then share their SLOT link and QR in the shop and social bio. Track search → service → slot → confirmed → attended, repeat bookings, no-shows, provider weekly activity and support incidents. Do not collect private contact details in analytics.
+
+Prioritize dependable calendars and repeat use over paid acquisition. Interview inactive providers weekly. After four weeks, expand only if the majority use the calendar every week and customers rebook. Test a USD 5–10/month provider plan through interviews and small paid trials; those are pricing hypotheses, not forecasts. Pay-at-venue commissions are difficult to enforce, so postpone transaction-fee revenue until payment and attribution are reliable. Add genuine completed-booking reviews, favourites, referral attribution and city pages next; public SEO pages can be server-rendered later when discovery warrants it. No revenue or valuation outcome is guaranteed.
+
+## AI-assisted implementation workflow
+
+Give your coding assistant one vertical slice per change: schema migration, access rules, UI, failure states and verification. Example: “Implement an owner-only day calendar using existing appointments RLS. Show CAT times, confirmed bookings and blocks; call block_time for time off. Include loading/empty/error states and prove owner B cannot see owner A's rows. Do not change auth or bypass RLS.” Review database diffs manually. Never paste live integration secrets into prompts. Keep real customer data out of fixtures.
+
+import http from 'node:http';
+import {readFile} from 'node:fs/promises';
+import {resolve,extname,relative,isAbsolute} from 'node:path';
+import {fileURLToPath} from 'node:url';
+const root=fileURLToPath(new URL('.',import.meta.url));
+http.createServer(async(req,res)=>{try{
+ const pathname=decodeURIComponent(new URL(req.url,'http://localhost').pathname);
+ const file=resolve(root,pathname==='/'?'index.html':'.'+pathname);
+ const within=relative(root,file);
+ if(within.startsWith('..')||isAbsolute(within))throw Error();
+ const data=await readFile(file);
+ res.setHeader('Content-Type',({'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8'})[extname(file)]||'text/plain');
+ res.setHeader('Cache-Control','no-store');res.end(data);
+}catch{res.writeHead(404);res.end('Not found');}}).listen(5173,'127.0.0.1',()=>console.log('SLOT is running: http://127.0.0.1:5173/ — keep this process open while using the app.'));
+
+@echo off
+cd /d "%~dp0"
+where node >nul 2>nul
+if errorlevel 1 (
+  echo SLOT needs Node.js 22 or newer. Install it from https://nodejs.org then try again.
+  pause
+  exit /b 1
+)
+echo Open http://127.0.0.1:5173/ in your browser.
+echo Keep this window open while using SLOT. Press Ctrl+C to stop.
+node server.mjs
+pause
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;700;800&display=swap');
+:root{font-family:'DM Sans',sans-serif;color:#222035;background:#faf9f6}*{box-sizing:border-box}body{margin:0}header{display:flex;align-items:center;justify-content:space-between;padding:22px 6%;border-bottom:1px solid #e7e3ed;background:white}header>span{font-size:11px;letter-spacing:2px}.logo{font:800 32px Manrope,sans-serif;letter-spacing:-2px;text-decoration:none;color:#252139}.logo span{color:#b8ed6c;font-size:17px;margin-left:3px}button,input,select{font:inherit}button{cursor:pointer;border:1px solid #ddd7e7;background:white;border-radius:30px;padding:10px 18px;color:inherit}button:hover,button.active{background:#292039;color:white}button:disabled{opacity:.5;cursor:wait}main{max-width:1150px;margin:auto;padding:0 24px}.notice{font-size:12px;text-align:center;padding:13px;color:#665b79}.hero{background:#eee8fa;padding:48px;border-radius:24px;margin:12px 0 28px;position:relative}.eyebrow{font-size:11px;letter-spacing:2px;font-weight:700;color:#6442a2}h1{font:800 clamp(36px,5vw,60px)/1.13 Manrope,sans-serif;letter-spacing:-2px;margin:18px 0}h1 em{font-style:normal;color:#6034c4}.hero>p:not(.eyebrow){color:#6a6077}.search{display:flex;gap:14px;align-items:center;max-width:520px;background:white;padding:7px 18px;border-radius:12px;margin-top:30px}.search input{border:0;margin:0;background:transparent;outline-offset:2px}nav{display:flex;gap:8px;overflow:auto;padding:4px 0}.heading{display:flex;justify-content:space-between;align-items:center;margin-top:25px}.heading span{font-size:12px;color:#777}h2{font-family:Manrope,sans-serif;font-size:23px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}.card{background:white;border:1px solid #e9e5ed;border-radius:18px;overflow:hidden}.art{height:155px;display:flex;align-items:center;justify-content:center;font-size:68px;background:#ded5ec}.card:nth-child(2) .art{background:#f4dbd1}.card:nth-child(3) .art{background:#d9e6d6}.card-body{padding:22px}.card h3{margin:8px 0}.tag{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#67518b}.muted{font-size:13px;color:#776e82}.card-bottom{display:flex;align-items:center;justify-content:space-between;margin-top:22px}.primary{background:#5b32c6;color:white;border:0;padding:13px 20px}.primary:hover{background:#432394}footer{text-align:center;padding:50px 10px;font-size:12px;line-height:2;color:#8b8393}dialog{border:0;border-radius:22px;padding:30px;max-width:440px;width:calc(100% - 32px);box-shadow:0 30px 100px #26203340}dialog::backdrop{background:#221b3d80}label{display:block;font-size:13px;margin:16px 0}input,select{display:block;width:100%;padding:12px;border:1px solid #dad3e3;border-radius:9px;margin-top:7px;background:white}.close{float:right}dialog p{font-size:13px;line-height:1.6}#status,#booking-message{color:#5931b4}.appointment{padding:20px;background:white;border:1px solid #e8e3ee;border-radius:14px;margin:12px 0}@media(max-width:700px){header{padding:18px 22px}header>span{font-size:9px;letter-spacing:1px}.hero{padding:28px 22px}.grid{grid-template-columns:1fr}.heading{display:block}.heading span{display:block;margin-bottom:18px}main{padding:0 16px}.art{height:130px}}
+
+.env
+.env.*
+!.env.example
+node_modules/
+.DS_Store
+
+import {config} from './config.js';
+import {localSlots,catTime} from './booking.js';
+import {apiHeaders,validateConfig,readResponse} from './auth.js';
+const $=s=>document.querySelector(s);
+let live=false,configError='';
+try{live=validateConfig(config);}catch(e){configError=e.message;}
+const samples=[{id:'demo-1',name:'The Fade Room',area:'Avondale',category:'barber',services:[{id:'s1',name:'Signature fade',duration_minutes:30,price_minor:800,currency:'USD'}]},{id:'demo-2',name:'Polished by Tadi',area:'Borrowdale',category:'nails',services:[{id:'s2',name:'Gel manicure',duration_minutes:60,price_minor:1500,currency:'USD'}]},{id:'demo-3',name:'First Chair',area:'CBD',category:'barber',services:[{id:'s3',name:'Cut & beard',duration_minutes:45,price_minor:1200,currency:'USD'}]}];
+let providers=[],category='all',selected,session=JSON.parse(sessionStorage.getItem('slot-session')||'null');
+let demoBookings=JSON.parse(localStorage.getItem('slot-demo-bookings')||'[]');
+const money=s=>`${s.currency} ${(s.price_minor/100).toFixed(2)}`;
+async function api(path,body,method=body?'POST':'GET'){
+ if(session?.refresh_token&&session.expires_at<Date.now()/1000+60){
+  const refreshed=await fetch(config.url+'/auth/v1/token?grant_type=refresh_token',{method:'POST',headers:{apikey:config.anonKey,'Content-Type':'application/json'},body:JSON.stringify({refresh_token:session.refresh_token})});
+  if(!refreshed.ok){session=null;sessionStorage.removeItem('slot-session');throw Error('Session expired. Sign in again.');}
+  session=await refreshed.json();session.expires_at=Math.floor(Date.now()/1000)+session.expires_in;sessionStorage.setItem('slot-session',JSON.stringify(session));
+ }
+ const r=await fetch(config.url.replace(/\/$/,'')+path,{method,headers:apiHeaders(config.anonKey,session?.access_token),...(body?{body:JSON.stringify(body)}:{})});
+ return readResponse(r);
+}
+function text(tag,value,cls){const el=document.createElement(tag);el.textContent=value;if(cls)el.className=cls;return el;}
+function render(){ $('#list').replaceChildren();providers.filter(p=>(category==='all'||p.category===category)&&`${p.name} ${p.area}`.toLowerCase().includes($('#search').value.toLowerCase())).forEach(p=>{
+ const card=text('article','','card'),art=text('div',p.category==='barber'?'✂':'✦','art'),body=text('div','','card-body');body.append(text('span',p.category==='barber'?'BARBER · HARARE':'NAIL ARTIST · HARARE','tag'),text('h3',p.name),text('p',p.area,'muted'));
+ const bottom=text('div','','card-bottom'),button=text('button','Book a slot','primary');button.onclick=()=>openBooking(p);bottom.append(text('span',p.services.length?`From ${money([...p.services].sort((a,b)=>a.price_minor-b.price_minor)[0])}`:'No services'),button);body.append(bottom);card.append(art,body);$('#list').append(card);
+ });if(!$('#list').children.length)$('#list').append(text('p','No businesses found. Try another search.'));
+}
+async function slots(){try{const s=selected.services.find(s=>s.id===$('#service').value);$('#time').replaceChildren();if(!s)return;
+ const starts=live?await api('/rest/v1/rpc/available_slots',{p_service:s.id,p_day:$('#date').value}):localSlots($('#date').value,s.duration_minutes,demoBookings,selected.id);
+ starts.forEach(v=>{const iso=typeof v==='string'?v:v.starts_at;const o=text('option',catTime(iso));o.value=iso;$('#time').append(o);});$('#confirm').disabled=!starts.length;if(!starts.length)$('#booking-message').textContent='No slots available. Try another date.';
+}catch(e){$('#booking-message').textContent=e.message;$('#confirm').disabled=true;}}
+function openBooking(p){selected=p;$('#provider-name').textContent=p.name;$('#service').replaceChildren();p.services.forEach(s=>{const o=text('option',`${s.name} · ${s.duration_minutes} min · ${money(s)}`);o.value=s.id;$('#service').append(o)});const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Harare',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());$('#date').min=day;$('#date').value=day;$('#booking-message').textContent='';$('#booking').showModal();slots();}
+$('#service').onchange=slots;$('#date').onchange=slots;$('#close').onclick=()=>$('#booking').close();$('#search').oninput=render;
+document.querySelectorAll('[data-category]').forEach(b=>b.onclick=()=>{category=b.dataset.category;document.querySelectorAll('[data-category]').forEach(n=>n.classList.toggle('active',n===b));render()});
+$('#booking-form').onsubmit=async e=>{e.preventDefault();$('#confirm').disabled=true;try{const s=selected.services.find(s=>s.id===$('#service').value),start=$('#time').value;if(!start)throw Error('Choose a time.');if(live){if(!session)throw Error('Sign in before booking.');const signature=`${session.user.id}:${s.id}:${start}`;let pending=JSON.parse(sessionStorage.getItem('slot-pending')||'null');if(pending?.signature!==signature){pending={signature,key:crypto.randomUUID()};sessionStorage.setItem('slot-pending',JSON.stringify(pending));}await api('/rest/v1/rpc/book_appointment',{p_service:s.id,p_start:start,p_key:pending.key});sessionStorage.removeItem('slot-pending');}else{const valid=localSlots($('#date').value,s.duration_minutes,demoBookings,selected.id);if(!valid.includes(start))throw Error('That time is taken. Choose another.');demoBookings.push({id:crypto.randomUUID(),provider_id:selected.id,name:selected.name,service:s.name,starts_at:start,ends_at:new Date(+new Date(start)+s.duration_minutes*60000).toISOString(),status:'confirmed'});localStorage.setItem('slot-demo-bookings',JSON.stringify(demoBookings));}$('#booking').close();$('#status').textContent=live?'Appointment confirmed.':'Demo appointment saved on this device.';await showBookings();}catch(e){$('#booking-message').textContent=e.message+' Check My bookings before choosing another time if your connection dropped.';}finally{$('#confirm').disabled=!$('#time').options.length;}};
+async function showBookings(){try{if(live&&!session)throw Error('Sign in to see your bookings.');const rows=live?await api('/rest/v1/appointments?select=*&order=starts_at.asc'):demoBookings;$('#bookings').hidden=false;$('#booking-list').replaceChildren();for(const b of rows){const item=text('div','','appointment');item.append(text('strong',b.name||providers.find(p=>p.id===b.provider_id)?.name||'Appointment'),text('p',`${new Date(b.starts_at).toLocaleDateString('en-GB',{timeZone:'Africa/Harare'})} · ${catTime(b.starts_at)} CAT · ${b.status}`));if(b.status==='confirmed'){const cancel=text('button','Cancel appointment');cancel.onclick=async()=>{try{if(live)await api('/rest/v1/rpc/cancel_appointment',{p_id:b.id});else{b.status='cancelled';localStorage.setItem('slot-demo-bookings',JSON.stringify(demoBookings));}await showBookings();}catch(e){$('#status').textContent=e.message;}};item.append(cancel);}$('#booking-list').append(item);}if(!rows.length)$('#booking-list').textContent='No appointments yet.';}catch(e){$('#status').textContent=e.message;}}
+$('#appointments').onclick=showBookings;$('#account').onclick=()=>{if(!live){$('#status').textContent='Demo mode needs no account. Configure Supabase to enable real sign-in.';return;}$('#login').showModal();};$('#close-login').onclick=()=>$('#login').close();
+$('#send-code').onclick=async()=>{if(!$('#email').reportValidity())return;const button=$('#send-code');button.disabled=true;try{await api('/auth/v1/otp',{email:$('#email').value.trim(),create_user:true});$('#login-message').textContent='Check your email for your sign-in code, then enter it above.';}catch(e){$('#login-message').textContent=e.message;}finally{button.disabled=false;}};
+$('#login-form').onsubmit=async e=>{e.preventDefault();try{session=await api('/auth/v1/verify',{email:$('#email').value,token:$('#code').value,type:'email'});session.expires_at=Math.floor(Date.now()/1000)+session.expires_in;sessionStorage.setItem('slot-session',JSON.stringify(session));$('#login').close();$('#account').textContent='Account';$('#status').textContent='Signed in.';}catch(e){$('#login-message').textContent=e.message;}};
+$('#logout').onclick=async()=>{try{if(session)await api('/auth/v1/logout',{});session=null;sessionStorage.removeItem('slot-session');$('#login').close();$('#status').textContent='Signed out.';}catch(e){$('#login-message').textContent=e.message;}};
+async function init(){try{if(configError){$('#mode').textContent='Supabase configuration needs attention';throw Error(configError);}if(live){$('#mode').textContent='Live · Zimbabwe time · Pay at venue';providers=await api('/rest/v1/providers?select=*,services(*)&published=eq.true');providers.forEach(p=>p.services=p.services.filter(s=>s.active));}else providers=samples;$('#account').textContent=session?'Account':'Sign in';render();}catch(e){$('#status').textContent=e.message;}}init();
+
+// Publishable keys belong in apikey; only user/legacy JWTs belong in Bearer.
+export function apiHeaders(publicKey,accessToken){
+ const headers={apikey:publicKey,'Content-Type':'application/json'};
+ if(accessToken)headers.Authorization=`Bearer ${accessToken}`;
+ else if(publicKey.startsWith('eyJ'))headers.Authorization=`Bearer ${publicKey}`;
+ return headers;
+}
+export function validateConfig(config){
+ if(!config.url&&!config.anonKey)return false;
+ if(!config.url||!config.anonKey)throw Error('Supabase setup is incomplete: project URL and public key are both required.');
+ const url=new URL(config.url);
+ if(url.protocol!=='https:'||url.pathname!=='/'||url.search||url.hash)throw Error('Use the HTTPS Supabase project URL without a path.');
+ if(config.anonKey.startsWith('sb_publishable_'))return true;
+ try{
+  const payload=JSON.parse(atob(config.anonKey.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+  if(payload.role==='anon')return true;
+ }catch{}
+ throw Error('Use a Supabase publishable key or legacy anon key. Secret and service-role keys must never be used in this app.');
+}
+export async function readResponse(response){
+ const raw=await response.text();let data=null;
+ if(raw){try{data=JSON.parse(raw);}catch{throw Error('Supabase returned an unexpected response. Try again.');}}
+ if(!response.ok)throw Error(data?.message||data?.msg||data?.error_description||data?.error||`Request failed (${response.status})`);
+ return data;
+}
+
+export const overlaps=(a,b)=>new Date(a.start)<new Date(b.end)&&new Date(b.start)<new Date(a.end);
+export function localSlots(day,duration,bookings,provider,now=new Date()){
+ const result=[];
+ for(let m=9*60;m+duration<=17*60;m+=30){
+  const start=new Date(`${day}T${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}:00+02:00`);
+  const end=new Date(+start+duration*60000);
+  if(start>now&&!bookings.some(b=>b.provider_id===provider&&b.status==='confirmed'&&overlaps({start,end},{start:b.starts_at,end:b.ends_at})))result.push(start.toISOString());
+ }return result;
+}
+export const catTime=iso=>new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Harare',hour:'2-digit',minute:'2-digit'}).format(new Date(iso));
+
+// Project URL and sb_publishable_... key (or legacy anon JWT) only.
+// Never place a secret/service-role key here. Empty values keep demo mode enabled.
+export const config = {url:'', anonKey:''};
+
+# Publish the SLOT demo on GitHub Pages
+
+This workflow publishes a demo with sample businesses and browser-local bookings. It deliberately writes an empty Supabase config into the published artifact. No sign-in, real bookings or payments are enabled. Keep the commercial marketplace on a host whose terms permit it: https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits
+
+1. Create a repository named `slot-demo` on GitHub. For free Pages hosting, use a public repository. Upload the contents of this `slot` folder at the repository root, including `.github/workflows/pages.yml` and `tests/`.
+2. In repository Settings → Pages, set Source to GitHub Actions.
+3. Push to `main` (or open Actions → Deploy SLOT demo to GitHub Pages → Run workflow).
+4. Wait for the workflow to finish. Use the deployment URL shown by the workflow rather than guessing it.
+
+Only the six frontend files and `.nojekyll` are published as website assets. SQL, tests, README and server files are not served by Pages. Files committed to a public repository are still publicly visible as source.
+
+The workflow expects `index.html` at the repository root, not under `outputs/slot`. Relative asset links already support a repository subpath such as `/slot-demo/`.
