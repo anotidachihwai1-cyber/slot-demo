@@ -1,6 +1,8 @@
 import {config} from './config.js';
 import {localSlots,catTime} from './booking.js';
 import {apiHeaders,validateConfig,readResponse} from './auth.js';
+// Public frontend key only. Authentication is independent of demo bookings.
+const authConfig={url:'https://pwghkuizlgvjvjlahpul.supabase.co',anonKey:'sb_publishable_CBuRlSMW6Cd2SIRPXWHFag_rN8AdbqW'};
 const $=s=>document.querySelector(s);
 let live=false,configError='';
 try{live=validateConfig(config);}catch(e){configError=e.message;}
@@ -151,14 +153,17 @@ let providers=[],category='all',selected,session=JSON.parse(sessionStorage.getIt
 let demoBookings=JSON.parse(localStorage.getItem('slot-demo-bookings')||'[]');
 const money=s=>`${s.currency} ${(s.price_minor/100).toFixed(2)}`;
 async function api(path,body,method=body?'POST':'GET'){
- if(session?.refresh_token&&session.expires_at<Date.now()/1000+60){
-  const refreshed=await fetch(config.url+'/auth/v1/token?grant_type=refresh_token',{method:'POST',headers:{apikey:config.anonKey,'Content-Type':'application/json'},body:JSON.stringify({refresh_token:session.refresh_token})});
-  if(!refreshed.ok){session=null;sessionStorage.removeItem('slot-session');throw Error('Session expired. Sign in again.');}
-  session=await refreshed.json();session.expires_at=Math.floor(Date.now()/1000)+session.expires_in;sessionStorage.setItem('slot-session',JSON.stringify(session));
+ const publicAuth=path.startsWith('/auth/v1/otp')||path.startsWith('/auth/v1/verify');
+ if(!publicAuth&&session?.refresh_token&&session.expires_at<Date.now()/1000+60){
+  const refreshed=await fetch(authConfig.url+'/auth/v1/token?grant_type=refresh_token',{method:'POST',headers:apiHeaders(authConfig.anonKey),body:JSON.stringify({refresh_token:session.refresh_token})});
+  if(!refreshed.ok){session=null;sessionStorage.removeItem('slot-session');$('#account').textContent='Sign in';throw Error('Session expired. Please sign in again.');}
+  session=await readResponse(refreshed);saveSession(session);
  }
- const r=await fetch(config.url.replace(/\/$/,'')+path,{method,headers:apiHeaders(config.anonKey,session?.access_token),...(body?{body:JSON.stringify(body)}:{})});
+ const target=path.startsWith('/auth/')?authConfig:config;
+ const r=await fetch(target.url.replace(/\/$/,'')+path,{method,headers:apiHeaders(target.anonKey,publicAuth?undefined:session?.access_token),...(body?{body:JSON.stringify(body)}:{})});
  return readResponse(r);
 }
+function saveSession(value){session=value;session.expires_at=Math.floor(Date.now()/1000)+(Number(session.expires_in)||3600);sessionStorage.setItem('slot-session',JSON.stringify(session));$('#account').textContent='Account';}
 function text(tag,value,cls){const el=document.createElement(tag);el.textContent=value;if(cls)el.className=cls;return el;}
 function render(){
  $('#list').replaceChildren();
@@ -203,8 +208,49 @@ if(!live){
 document.querySelectorAll('[data-category]').forEach(b=>b.onclick=()=>{category=b.dataset.category;document.querySelectorAll('[data-category]').forEach(n=>n.classList.toggle('active',n===b));render()});
 $('#booking-form').onsubmit=async e=>{e.preventDefault();$('#confirm').disabled=true;try{const s=selected.services.find(s=>s.id===$('#service').value),start=$('#time').value;if(!start)throw Error('Choose a time.');if(live){if(!session)throw Error('Sign in before booking.');const signature=`${session.user.id}:${s.id}:${start}`;let pending=JSON.parse(sessionStorage.getItem('slot-pending')||'null');if(pending?.signature!==signature){pending={signature,key:crypto.randomUUID()};sessionStorage.setItem('slot-pending',JSON.stringify(pending));}await api('/rest/v1/rpc/book_appointment',{p_service:s.id,p_start:start,p_key:pending.key});sessionStorage.removeItem('slot-pending');}else{const valid=localSlots($('#date').value,s.duration_minutes,demoBookings,selected.id);if(!valid.includes(start))throw Error('That time is taken. Choose another.');demoBookings.push({id:crypto.randomUUID(),provider_id:selected.id,name:selected.name,service:s.name,starts_at:start,ends_at:new Date(+new Date(start)+s.duration_minutes*60000).toISOString(),status:'confirmed'});localStorage.setItem('slot-demo-bookings',JSON.stringify(demoBookings));}$('#booking').close();$('#status').textContent=live?'Appointment confirmed.':'Demo appointment saved on this device.';await showBookings();}catch(e){$('#booking-message').textContent=e.message+' Check My bookings before choosing another time if your connection dropped.';}finally{$('#confirm').disabled=!$('#time').options.length;}};
 async function showBookings(){try{if(live&&!session)throw Error('Sign in to see your bookings.');const rows=live?await api('/rest/v1/appointments?select=*&order=starts_at.asc'):demoBookings;$('#bookings').hidden=false;$('#booking-list').replaceChildren();for(const b of rows){const item=text('div','','appointment');item.append(text('strong',b.name||providers.find(p=>p.id===b.provider_id)?.name||'Appointment'),text('p',`${new Date(b.starts_at).toLocaleDateString('en-GB',{timeZone:'Africa/Harare'})} · ${catTime(b.starts_at)} CAT · ${b.status}`));if(b.status==='confirmed'){const cancel=text('button','Cancel appointment');cancel.onclick=async()=>{try{if(live)await api('/rest/v1/rpc/cancel_appointment',{p_id:b.id});else{b.status='cancelled';localStorage.setItem('slot-demo-bookings',JSON.stringify(demoBookings));}await showBookings();}catch(e){$('#status').textContent=e.message;}};item.append(cancel);}$('#booking-list').append(item);}if(!rows.length)$('#booking-list').textContent='No appointments yet.';}catch(e){$('#status').textContent=e.message;}}
-$('#appointments').onclick=showBookings;$('#account').onclick=()=>{if(!live){$('#status').textContent='Demo mode needs no account. Configure Supabase to enable real sign-in.';return;}$('#login').showModal();};$('#close-login').onclick=()=>$('#login').close();
-$('#send-code').onclick=async()=>{if(!$('#email').reportValidity())return;const button=$('#send-code');button.disabled=true;try{await api('/auth/v1/otp',{email:$('#email').value.trim(),create_user:true});$('#login-message').textContent='Check your email for your sign-in code, then enter it above.';}catch(e){$('#login-message').textContent=e.message;}finally{button.disabled=false;}};
-$('#login-form').onsubmit=async e=>{e.preventDefault();try{session=await api('/auth/v1/verify',{email:$('#email').value,token:$('#code').value,type:'email'});session.expires_at=Math.floor(Date.now()/1000)+session.expires_in;sessionStorage.setItem('slot-session',JSON.stringify(session));$('#login').close();$('#account').textContent='Account';$('#status').textContent='Signed in.';}catch(e){$('#login-message').textContent=e.message;}};
-$('#logout').onclick=async()=>{try{if(session)await api('/auth/v1/logout',{});session=null;sessionStorage.removeItem('slot-session');$('#login').close();$('#status').textContent='Signed out.';}catch(e){$('#login-message').textContent=e.message;}};
-async function init(){try{if(configError){$('#mode').textContent='Supabase configuration needs attention';throw Error(configError);}if(live){$('#mode').textContent='Live · Zimbabwe time · Pay at venue';providers=await api('/rest/v1/providers?select=*,services(*)&published=eq.true');providers.forEach(p=>p.services=p.services.filter(s=>s.active));}else {providers=[...directoryListings,...samples];$('#mode').textContent='14 community listings · Contact businesses directly · Sample bookings are separate';}$('#account').textContent=session?'Account':'Sign in';render();}catch(e){$('#status').textContent=e.message;}}init();
+$('#appointments').onclick=showBookings;
+function openAccount(){
+ const signed=Boolean(session?.user);
+ $('#login-form h2').textContent=signed?'Your SLOT account':'Welcome to SLOT';
+ $('#login-form > p').textContent=signed?'You are signed in. Business listings are public; sample bookings remain on this device.':'Enter your email. We will send a secure sign-in link—no password needed.';
+ $('#email').closest('label').style.display=signed?'none':'';
+ $('#email').required=!signed;
+ $('#code').closest('label').style.display='none';
+ $('#login-form button.primary').hidden=true;
+ $('#send-code').hidden=signed;$('#send-code').textContent='Email me a sign-in link';
+ $('#logout').hidden=!signed;
+ $('#login-message').textContent=signed?session.user.email:'';
+ $('#login').showModal();
+}
+$('#account').onclick=openAccount;
+$('#close-login').onclick=()=>$('#login').close();
+async function sendSignInLink(){
+ if(!$('#email').reportValidity())return;
+ const button=$('#send-code');button.disabled=true;
+ $('#login-message').textContent='Sending your sign-in link…';
+ try{
+  await api('/auth/v1/otp?redirect_to='+encodeURIComponent('https://anotidachihwai1-cyber.github.io/slot-demo/'),{email:$('#email').value.trim(),create_user:true});
+  $('#login-message').textContent='Check your inbox and spam folder. Click the sign-in link in the email to return to SLOT. Wait at least a minute before requesting another.';
+ }catch(e){
+  const message=e.message;
+  $('#login-message').textContent=/authorized|email_address_not_authorized/i.test(message)?'Email delivery is currently limited to the project team. Please use your Supabase account email until the site owner connects an email-sending service.':/rate|too many|security purposes/i.test(message)?'Too many email requests. Please wait before trying again.':message;
+ }finally{button.disabled=false;}
+}
+$('#send-code').onclick=sendSignInLink;
+$('#login-form').onsubmit=e=>{e.preventDefault();if(!session)sendSignInLink();};
+$('#logout').onclick=async()=>{const button=$('#logout');button.disabled=true;try{if(session)await api('/auth/v1/logout',{});session=null;sessionStorage.removeItem('slot-session');sessionStorage.removeItem('slot-pending');$('#account').textContent='Sign in';$('#login').close();$('#status').textContent='Signed out.';}catch(e){$('#login-message').textContent=e.message;}finally{button.disabled=false;}};
+async function completeEmailSignIn(){
+ const fragment=new URLSearchParams(location.hash.slice(1));
+ const access=fragment.get('access_token');
+ const error=fragment.get('error_description');
+ if(!access&&!error)return false;
+ history.replaceState(null,'',location.pathname+location.search);
+ try{
+  if(error)throw Error(error);
+  const user=await readResponse(await fetch(authConfig.url+'/auth/v1/user',{headers:apiHeaders(authConfig.anonKey,access)}));
+  saveSession({access_token:access,refresh_token:fragment.get('refresh_token'),expires_in:Number(fragment.get('expires_in'))||3600,user});
+  $('#status').textContent='Signed in successfully.';return true;
+ }catch(e){session=null;sessionStorage.removeItem('slot-session');$('#status').textContent='Sign-in failed: '+e.message+' Please request a fresh link.';return false;}
+}
+async function init(){try{if(configError){$('#mode').textContent='Supabase configuration needs attention';throw Error(configError);}if(live){$('#mode').textContent='Live · Zimbabwe time · Pay at venue';providers=await api('/rest/v1/providers?select=*,services(*)&published=eq.true');providers.forEach(p=>p.services=p.services.filter(s=>s.active));}else {providers=[...directoryListings,...samples];$('#mode').textContent='14 community listings · Contact businesses directly · Sample bookings are separate';}$('#account').textContent=session?'Account':'Sign in';render();}catch(e){$('#status').textContent=e.message;}}
+const returnedFromEmail=await completeEmailSignIn();await init();if(returnedFromEmail)openAccount();
